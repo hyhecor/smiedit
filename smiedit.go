@@ -13,7 +13,9 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/exp/slog"
+	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/korean"
+	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 )
 
@@ -51,16 +53,25 @@ var syncCmd = &cobra.Command{
 }
 
 type Sync struct {
-	filename  string
-	timestamp time.Duration
-	output    string
+	filename         string
+	timestamp        time.Duration
+	output           string
+	decoderEncoding  string
+	encodingEncoding string
 }
 
-var sync Sync
+var sync = Sync{
+	timestamp:        time.Duration(0),
+	output:           "-",
+	decoderEncoding:  "UTF8",
+	encodingEncoding: "UTF8",
+}
 
 func init() {
-	syncCmd.PersistentFlags().DurationVarP(&sync.timestamp, "timestamp", "t", time.Duration(0), "sync timestamp")
+	syncCmd.PersistentFlags().DurationVarP(&sync.timestamp, "timestamp", "t", sync.timestamp, "sync timestamp")
 	syncCmd.PersistentFlags().StringVarP(&sync.output, "output", "o", "-", "out filename")
+	syncCmd.PersistentFlags().StringVar(&sync.decoderEncoding, "decoder-encoding", sync.decoderEncoding, `decoder encoding enum("UTF8", "EUCKR")`)
+	syncCmd.PersistentFlags().StringVar(&sync.encodingEncoding, "encoder-encoding", sync.encodingEncoding, `encoder encoding enum("UTF8", "EUCKR")`)
 }
 
 func Execute() {
@@ -70,18 +81,18 @@ func Execute() {
 	}
 }
 
-func (cmd Sync) Exec() error {
-	file, err := os.Open(cmd.filename)
+func (sync Sync) Exec() error {
+	file, err := os.Open(sync.filename)
 	if err != nil {
-		slog.Error("cannot file open", "error", err, "filename", cmd.filename)
+		slog.Error("cannot file open", "error", err, "filename", sync.filename)
 		return err
 	}
 
 	defer file.Close()
 
-	delta := int64(cmd.timestamp / time.Millisecond)
+	delta := int64(sync.timestamp / time.Millisecond)
 
-	exp, err := regexp.Compile(`<SYNC Start=\d+>`)
+	exp, err := regexp.Compile(`(?i)<SYNC Start=\d+>`)
 	if err != nil {
 		slog.Error("regexp Compile ", "error", err)
 		return err
@@ -89,7 +100,7 @@ func (cmd Sync) Exec() error {
 
 	fieldStart := "Start="
 
-	expN, err := regexp.Compile(`Start=\d+`)
+	expN, err := regexp.Compile(`(?i)Start=\d+`)
 	if err != nil {
 		slog.Error("regexp Compile ", "error", err)
 		return err
@@ -102,8 +113,8 @@ func (cmd Sync) Exec() error {
 	}
 
 	w := os.Stdout
-	if cmd.output != "-" {
-		w, err = os.Create(cmd.output)
+	if sync.output != "-" {
+		w, err = os.Create(sync.output)
 		if err != nil {
 			slog.Error("io Copy ", "error", err)
 			return err
@@ -112,19 +123,23 @@ func (cmd Sync) Exec() error {
 		defer w.Close()
 	}
 
-	reader := transform.NewReader(buf, korean.EUCKR.NewDecoder())
-	// writer := transform.NewWriter(os.Stdout, unicode.UTF8.NewEncoder())
-	writer := transform.NewWriter(w, korean.EUCKR.NewEncoder())
+	decoder := transform.NewReader(buf, Encoding(sync.decoderEncoding).NewDecoder())
+	encoder := transform.NewWriter(w, Encoding(sync.encodingEncoding).NewEncoder())
 
-	fileScanner := bufio.NewScanner(reader)
+	fileScanner := bufio.NewScanner(decoder)
 
 	fileScanner.Split(bufio.ScanLines)
 
 	for fileScanner.Scan() {
+
 		if !exp.MatchString(fileScanner.Text()) {
-			fmt.Fprintln(writer, fileScanner.Text())
+			slog.Info("not matched", fileScanner.Text())
+
+			fmt.Fprintln(encoder, fileScanner.Text())
 			continue
 		}
+
+		slog.Info("matched", fileScanner.Text())
 
 		indexs := expN.FindAllIndex([]byte(fileScanner.Text()), -1)
 
@@ -138,7 +153,7 @@ func (cmd Sync) Exec() error {
 			return err
 		}
 
-		fmt.Fprintln(writer, strings.Join([]string{
+		fmt.Fprintln(encoder, strings.Join([]string{
 			string(begin),
 			fmt.Sprintf("%s%d", fieldStart, ts+delta),
 			string(end),
@@ -146,4 +161,15 @@ func (cmd Sync) Exec() error {
 	}
 
 	return nil
+}
+
+func Encoding(encoding string) encoding.Encoding {
+	switch encoding {
+	case "UTF8":
+		return unicode.UTF8
+	case "EUCKR":
+		return korean.EUCKR
+	default:
+		panic(fmt.Errorf("unsupported encoding string=%q", encoding))
+	}
 }
