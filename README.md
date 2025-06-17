@@ -3,5 +3,5 @@
 ## sync
 
 ```sh
-smiedit sync -t 10s -o [outfile] [smifile]
+smiedit sync -t 10s -o [outfile] [inputfile]
 ```

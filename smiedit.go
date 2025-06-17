@@ -20,16 +20,14 @@ import (
 var rootCmd = &cobra.Command{
 	Use:     "smiedit",
 	Short:   "smi file editor",
-	Version: Ver,
+	Version: Version,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("root")
-		fmt.Println("args:", args)
+		cmd.Usage()
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(syncCmd)
-	// rootCmd.AddCommand(versionCmd)
 }
 
 var syncCmd = &cobra.Command{
@@ -38,14 +36,7 @@ var syncCmd = &cobra.Command{
 	Args:       cobra.MinimumNArgs(1),
 	ArgAliases: []string{"filename"},
 	Run: func(cmd *cobra.Command, args []string) {
-		// fmt.Println("sync")
-		// fmt.Println("args:", args)
-
 		syncOption.filename = args[0]
-
-		// fmt.Println("timestamp:", sync.timestamp)
-		// fmt.Println("filename:", sync.filename)
-
 		syncOption.Exec()
 	},
 }
