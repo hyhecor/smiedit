@@ -53,25 +53,25 @@ var syncCmd = &cobra.Command{
 }
 
 type Sync struct {
-	filename         string
-	timestamp        time.Duration
-	output           string
-	decoderEncoding  string
-	encodingEncoding string
+	filename       string
+	timestamp      time.Duration
+	output         string
+	readerEncoding string
+	writerEncoding string
 }
 
 var sync = Sync{
-	timestamp:        time.Duration(0),
-	output:           "-",
-	decoderEncoding:  "UTF8",
-	encodingEncoding: "UTF8",
+	timestamp:      time.Duration(0),
+	output:         "-",
+	readerEncoding: Encoding_UTF8,
+	writerEncoding: Encoding_UTF8,
 }
 
 func init() {
-	syncCmd.PersistentFlags().DurationVarP(&sync.timestamp, "timestamp", "t", sync.timestamp, "sync timestamp")
-	syncCmd.PersistentFlags().StringVarP(&sync.output, "output", "o", "-", "out filename")
-	syncCmd.PersistentFlags().StringVar(&sync.decoderEncoding, "decoder-encoding", sync.decoderEncoding, `decoder encoding enum("UTF8", "EUCKR")`)
-	syncCmd.PersistentFlags().StringVar(&sync.encodingEncoding, "encoder-encoding", sync.encodingEncoding, `encoder encoding enum("UTF8", "EUCKR")`)
+	syncCmd.Flags().DurationVarP(&sync.timestamp, "timestamp", "t", sync.timestamp, "sync timestamp")
+	syncCmd.Flags().StringVarP(&sync.output, "output", "o", "-", "out filename")
+	syncCmd.Flags().StringVarP(&sync.readerEncoding, "reader-encoding", "R", sync.readerEncoding, `decoder encoding`)
+	syncCmd.Flags().StringVarP(&sync.writerEncoding, "writer-encoding", "W", sync.writerEncoding, `encoder encoding`)
 }
 
 func Execute() {
@@ -106,46 +106,48 @@ func (sync Sync) Exec() error {
 		return err
 	}
 
-	var buf = &bytes.Buffer{}
-	if _, err := io.Copy(buf, file); err != nil {
+	var input = &bytes.Buffer{}
+	if _, err := io.Copy(input, file); err != nil {
 		slog.Error("io Copy ", "error", err)
 		return err
 	}
 
-	w := os.Stdout
+	output := os.Stdout
 	if sync.output != "-" {
-		w, err = os.Create(sync.output)
+		output, err = os.Create(sync.output)
 		if err != nil {
 			slog.Error("io Copy ", "error", err)
 			return err
 		}
 
-		defer w.Close()
+		defer output.Close()
 	}
 
-	decoder := transform.NewReader(buf, Encoding(sync.decoderEncoding).NewDecoder())
-	encoder := transform.NewWriter(w, Encoding(sync.encodingEncoding).NewEncoder())
+	r := transform.NewReader(input, NewEncoding(sync.readerEncoding).NewDecoder())
+	w := transform.NewWriter(output, NewEncoding(sync.writerEncoding).NewEncoder())
 
-	fileScanner := bufio.NewScanner(decoder)
+	fileScanner := bufio.NewScanner(r)
 
 	fileScanner.Split(bufio.ScanLines)
 
 	for fileScanner.Scan() {
 
-		if !exp.MatchString(fileScanner.Text()) {
-			slog.Info("not matched", fileScanner.Text())
+		Text := fileScanner.Text
 
-			fmt.Fprintln(encoder, fileScanner.Text())
+		if !exp.MatchString(Text()) {
+			slog.Info("not matched", Text())
+
+			fmt.Fprintln(w, Text())
 			continue
 		}
 
-		slog.Info("matched", fileScanner.Text())
+		slog.Info("matched", Text())
 
-		indexs := expN.FindAllIndex([]byte(fileScanner.Text()), -1)
+		indexs := expN.FindAllIndex([]byte(Text()), -1)
 
-		begin := []byte(fileScanner.Text())[:indexs[0][0]]
-		end := []byte(fileScanner.Text())[indexs[0][1]:]
-		start := []byte(fileScanner.Text())[indexs[0][0]+len(fieldStart) : indexs[0][1]]
+		begin := []byte(Text())[:indexs[0][0]]
+		end := []byte(Text())[indexs[0][1]:]
+		start := []byte(Text())[indexs[0][0]+len(fieldStart) : indexs[0][1]]
 
 		ts, err := strconv.ParseInt(string(start), 10, 0)
 		if err != nil {
@@ -153,7 +155,7 @@ func (sync Sync) Exec() error {
 			return err
 		}
 
-		fmt.Fprintln(encoder, strings.Join([]string{
+		fmt.Fprintln(w, strings.Join([]string{
 			string(begin),
 			fmt.Sprintf("%s%d", fieldStart, ts+delta),
 			string(end),
@@ -163,13 +165,45 @@ func (sync Sync) Exec() error {
 	return nil
 }
 
-func Encoding(encoding string) encoding.Encoding {
+func NewEncoding(encoding string) encoding.Encoding {
 	switch encoding {
-	case "UTF8":
+	case Encoding_UTF8:
 		return unicode.UTF8
-	case "EUCKR":
+	case Encoding_UTF8BOM:
+		return unicode.UTF8BOM
+	case Encoding_UTF16LE:
+		return unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM)
+	case Encoding_UTF16LEBOM:
+		return unicode.UTF16(unicode.LittleEndian, unicode.UseBOM)
+	case Encoding_UTF16BE:
+		return unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM)
+	case Encoding_UTF16BEBOM:
+		return unicode.UTF16(unicode.BigEndian, unicode.UseBOM)
+	case Encoding_EUCKR:
 		return korean.EUCKR
 	default:
-		panic(fmt.Errorf("unsupported encoding string=%q", encoding))
+		panic(fmt.Errorf("unsupported encoding string=%v enum=[%v]", encoding, strings.Join(Encodings(), ", ")))
+	}
+}
+
+const (
+	Encoding_UTF8       = "UTF8"
+	Encoding_UTF8BOM    = "UTF8BOM"
+	Encoding_UTF16LE    = "UTF16LE"
+	Encoding_UTF16LEBOM = "UTF16LEBOM"
+	Encoding_UTF16BE    = "UTF16BE"
+	Encoding_UTF16BEBOM = "UTF16BEBOM"
+	Encoding_EUCKR      = "EUCKR"
+)
+
+func Encodings() []string {
+	return []string{
+		Encoding_UTF8,
+		Encoding_UTF8BOM,
+		Encoding_UTF16LE,
+		Encoding_UTF16LEBOM,
+		Encoding_UTF16BE,
+		Encoding_UTF16BEBOM,
+		Encoding_EUCKR,
 	}
 }
